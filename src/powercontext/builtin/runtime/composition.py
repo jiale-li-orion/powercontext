@@ -141,7 +141,9 @@ from powercontext.builtin.runtime.family_processing import FAMILY_BINDINGS, Fami
 from powercontext.builtin.runtime.memory_write_gate import build_memory_write_gate
 from powercontext.builtin.runtime.models import MemorySearchMode, RuntimeCapabilities
 from powercontext.builtin.runtime.processing_discovery import (
-    SourceProcessingPendingProvider, enabled_profile_scopes, scopes_at_source_count_threshold,
+    SourceProcessingPendingProvider,
+    enabled_profile_scopes,
+    scopes_at_source_count_threshold,
 )
 from powercontext.builtin.runtime.processing_registry import (
     canonical_processing_manifest,
@@ -642,6 +644,7 @@ async def open_builtin_runtime(
                 remote_skill_distribution=contexts.remote_skill_distribution(),
                 statistics_service=contexts.statistics,
                 record_service=contexts.records,
+                lifecycle_database=contexts.database,
                 prompt_service=contexts.prompts,
                 recall_token_estimator=contexts.estimate_recall_tokens,
                 recall_effort_sink=recall_effort_sink,
@@ -791,10 +794,13 @@ def _artifact_processing_bindings(  # noqa: C901 - validate and assemble one reg
                 automatic_scope_filter=enabled_profile_scopes if family == "profile" else None,
                 count_scope_filter=(
                     None
-                    if (threshold := {
-                        "memory": config.runtime.memory_source_count_threshold,
-                        "topic-memory": config.runtime.topic_memory_source_count_threshold,
-                    }.get(family)) is None
+                    if (
+                        threshold := {
+                            "memory": config.runtime.memory_source_count_threshold,
+                            "topic-memory": config.runtime.topic_memory_source_count_threshold,
+                        }.get(family)
+                    )
+                    is None
                     else partial(scopes_at_source_count_threshold, binding_name=binding, threshold=threshold)
                 ),
             )
