@@ -117,6 +117,7 @@ class ArtifactProcessingBinding:
     # Only automatic admission is filtered; already accepted requests retain
     # their own Worker authorization and domain completion semantics.
     automatic_scope_filter: Callable[[AsyncConnection, tuple[str, ...]], Awaitable[frozenset[str]]] | None = None
+    count_scope_filter: Callable[[AsyncConnection, tuple[str, ...]], Awaitable[frozenset[str]]] | None = None
 
     def __post_init__(self) -> None:
         if not self.binding_name or self.binding_name != self.binding_name.strip():
@@ -392,6 +393,7 @@ class _FamilyState:
     running: dict[str, _RunningWorker] = field(default_factory=dict)
     retries: dict[str, _RetryState] = field(default_factory=dict)
     requested_after: int = 0
+    count_scan_after: int = 0
     scan_after: int = 0
     scan_generation: int = 0
     scan_in_progress: bool = False
@@ -656,6 +658,46 @@ class ArtifactProcessingSupervisor:
         else:
             await self._discover_requested(state)
             await self._discover_automatic(state)
+        await self._discover_count(state)
+
+    async def _discover_count(self, state: _FamilyState) -> None:
+        """Admit count-ready work through the existing durable requested-work channel.
+
+        This path is independent of time-based automatic waves, so a low source
+        count never suppresses a scheduled job and a partial Memory window must
+        pass the threshold again before another invocation is accepted.
+        """
+        eligible_filter = state.binding.count_scope_filter
+        if eligible_filter is None:
+            return
+        capacity = self._fresh_capacity(state)
+        if capacity <= 0:
+            return
+        after = state.count_scan_after
+        admitted: list[str] = []
+        async with self._database.transaction() as connection:
+            await self._leases.require_fence(connection, self._require_current_fence())
+            rows = await self._intents.scan(
+                connection, state.binding.binding_name, after_sequence=after,
+                limit=min(capacity, _DISCOVERY_PAGE_SIZE), dirty_only=True,
+            )
+            candidates = tuple(
+                row.scope_id for row in rows
+                if row.scope_id not in state.running
+                and row.scope_id not in state.queued
+                and row.scope_id not in state.retries
+                and row.requested_generation == row.handled_generation
+            )
+            eligible = await eligible_filter(connection, candidates) if candidates else frozenset()
+            for row in rows:
+                if row.scope_id in eligible:
+                    await self._intents.request(connection, row.scope_id, state.binding.binding_name)
+                    admitted.append(row.scope_id)
+        state.count_scan_after = (
+            rows[-1].pending_sequence if len(rows) == min(capacity, _DISCOVERY_PAGE_SIZE) else 0
+        )
+        for scope_id in admitted:
+            self._enqueue(state, scope_id)
 
     async def _discover_requested(self, state: _FamilyState) -> None:
         capacity = self._fresh_capacity(state)
@@ -1057,7 +1099,7 @@ class ArtifactProcessingSupervisor:
             state.retry_queued.clear()
             state.overflow_not_before = 0.0
             state.retries.clear()
-            state.requested_after = state.scan_after = state.scan_generation = 0
+            state.requested_after = state.count_scan_after = state.scan_after = state.scan_generation = 0
             state.scan_in_progress = False
             state.discovery_pending = True
 
@@ -1093,6 +1135,8 @@ class ArtifactProcessingSupervisor:
                 continue
             if state.next_schedule_at is not None:
                 deadlines.append(state.next_schedule_at)
+            if state.binding.count_scope_filter is not None:
+                deadlines.append(now + self._tick)
             if state.discovery_pending or state.scan_in_progress or not state.reconcile_complete or state.degraded:
                 deadlines.append(max(now, state.next_discovery_at))
         return None if not deadlines else max(0.001, min(deadlines) - now)

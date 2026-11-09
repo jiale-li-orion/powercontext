@@ -137,6 +137,8 @@ class RuntimeConfig(BaseModel):
 
     scope_cache_size: int = Field(default=DEFAULT_SCOPE_CACHE_SIZE, ge=1)
     source_window_limit: int = Field(default=100, ge=1)
+    memory_source_count_threshold: int | None = Field(default=None, gt=0, strict=True)
+    topic_memory_source_count_threshold: int | None = Field(default=None, gt=0, strict=True)
     context_assembly_max_entries: int = Field(default=8, ge=1)
     memory_extraction_profile: MemoryExtractionProfile = MemoryExtractionProfile.CODING
     memory_rerank_enabled: bool = False

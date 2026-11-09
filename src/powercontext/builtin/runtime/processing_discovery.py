@@ -74,3 +74,28 @@ class SourceProcessingPendingProvider:
                 if intent is None or intent.dirty_generation == intent.clean_generation:
                     await intents.mark_dirty(connection, scope, self._binding)
         return str(rows[-1][0]) if len(rows) == limit else None
+
+
+async def scopes_at_source_count_threshold(
+    connection: AsyncConnection,
+    scope_ids: tuple[str, ...],
+    *,
+    binding_name: str,
+    threshold: int,
+) -> frozenset[str]:
+    """Admit only scopes with enough distinct committed Source journal positions.
+
+    Both the Source high watermark and the family's successful cursor are
+    persisted; the difference survives worker errors and Runtime restarts.
+    """
+    if not scope_ids:
+        return frozenset()
+    cursors = await SourceCursorRepository().load_many(connection, scope_ids, binding_name)
+    heads = SOURCE_JOURNAL_HEADS_TABLE
+    rows = (await connection.execute(
+        select(heads.c.scope_id, heads.c.position).where(heads.c.scope_id.in_(scope_ids))
+    )).all()
+    return frozenset(
+        str(scope) for scope, high in rows
+        if int(high) - (0 if str(scope) not in cursors else cursors[str(scope)].cursor.sequence) >= threshold
+    )

@@ -140,7 +140,9 @@ from powercontext.builtin.runtime.decision_model import (
 from powercontext.builtin.runtime.family_processing import FAMILY_BINDINGS, FamilyWorkerSpec, run_family_worker
 from powercontext.builtin.runtime.memory_write_gate import build_memory_write_gate
 from powercontext.builtin.runtime.models import MemorySearchMode, RuntimeCapabilities
-from powercontext.builtin.runtime.processing_discovery import SourceProcessingPendingProvider, enabled_profile_scopes
+from powercontext.builtin.runtime.processing_discovery import (
+    SourceProcessingPendingProvider, enabled_profile_scopes, scopes_at_source_count_threshold,
+)
 from powercontext.builtin.runtime.processing_registry import (
     canonical_processing_manifest,
     dream_operations,
@@ -787,6 +789,14 @@ def _artifact_processing_bindings(  # noqa: C901 - validate and assemble one reg
                 if family == "skill"
                 else SourceProcessingPendingProvider(contexts.database, binding, family),
                 automatic_scope_filter=enabled_profile_scopes if family == "profile" else None,
+                count_scope_filter=(
+                    None
+                    if (threshold := {
+                        "memory": config.runtime.memory_source_count_threshold,
+                        "topic-memory": config.runtime.topic_memory_source_count_threshold,
+                    }.get(family)) is None
+                    else partial(scopes_at_source_count_threshold, binding_name=binding, threshold=threshold)
+                ),
             )
         )
     _validate_processing_registrations(configured)
