@@ -247,6 +247,13 @@ class CompositeMemoryIndex:
         request: MemorySearchRequest,
         /,
     ) -> MemorySearchChannels:
+        if request.mode == "hybrid":
+            # A backend may provide one native cross-index candidate statement.
+            # Keep the standard two-index path for backends without that capability.
+            for index in self.indexes:
+                native_search = getattr(index, "search_hybrid", None)
+                if native_search is not None:
+                    return await native_search(connection, scope_id, request)
         fts: tuple[MemoryChannelHit, ...] = ()
         vector: tuple[MemoryChannelHit, ...] = ()
         for index in self.indexes:
